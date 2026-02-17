@@ -405,38 +405,51 @@ class AutoReply : MessagingRuleFeature("Auto Reply", MessagingRuleType.AUTO_REPL
         }
     }
     
-    private suspend fun processMessage(conversationId: String, message: Message, currentTime: Long, detectedContentType: ContentType? = null) {
-        val messageId = message.messageDescriptor?.messageId ?: return
-        val senderId = message.senderId?.toString() ?: return
-        
-        try {
-            messageProcessingMutex.withLock {
-                if (processedMessages.contains(messageId)) return
-                
-                if (processedMessages.size > MAX_PROCESSED_MESSAGES) {
-                    processedMessages.clear()
-                }
-                processedMessages.add(messageId)
+    private suspend fun processMessage(
+    conversationId: String,
+    message: Message,
+    currentTime: Long,
+    detectedContentType: ContentType? = null
+) {
+    val messageId = message.messageDescriptor?.messageId ?: return
+    val senderId = message.senderId?.toString() ?: return
+
+    try {
+        // Ensure we don't process the same message multiple times
+        messageProcessingMutex.withLock {
+            if (processedMessages.contains(messageId)) return
+
+            if (processedMessages.size > MAX_PROCESSED_MESSAGES) {
+                processedMessages.clear()
             }
-            
-            val aiCfg = context.config.messaging.autoReply.aiConfig
-            if (aiCfg.enableAiReplies.get() && aiCfg.aiUseConversationHistory.get()) {
-                val messageContent = extractMessageContent(message, detectedContentType)
-                addToConversationHistory(conversationId, messageContent, isFromMe = false, detectedContentType)
-            }
-            
-            val replyText = generateReply(message, senderId, conversationId, detectedContentType)
-            if (replyText.isNotEmpty()) {
-                sendAutoReply(conversationId, replyText)
-                if (aiCfg.enableAiReplies.get() && aiCfg.aiUseConversationHistory.get()) {
-                    addToConversationHistory(conversationId, replyText, isFromMe = true, ContentType.CHAT)
-                }
-                updateCooldown(conversationId, currentTime)
-            }
-        } catch (e: Exception) {
-            context.log.error("Error processing message for auto-reply", e)
+            processedMessages.add(messageId)
         }
+
+        val aiCfg = context.config.messaging.autoReply.aiConfig
+        if (aiCfg.enableAiReplies.get() && aiCfg.aiUseConversationHistory.get()) {
+            val messageContent = extractMessageContent(message, detectedContentType)
+            addToConversationHistory(conversationId, messageContent, isFromMe = false, detectedContentType)
+        }
+
+        val replyText = generateReply(message, senderId, conversationId, detectedContentType)
+        if (replyText.isNotEmpty()) {
+            // --- Add a random delay between 5 and 7 seconds ---
+            val delayMillis = kotlin.random.Random.nextLong(5000L, 7000L)
+            delay(delayMillis)
+
+            sendAutoReply(conversationId, replyText)
+
+            if (aiCfg.enableAiReplies.get() && aiCfg.aiUseConversationHistory.get()) {
+                addToConversationHistory(conversationId, replyText, isFromMe = true, ContentType.CHAT)
+            }
+            updateCooldown(conversationId, currentTime)
+        }
+    } catch (e: Exception) {
+        context.log.error("Error processing message for auto-reply", e)
     }
+    }
+    
+
     
     private suspend fun generateReply(message: Message, senderId: String, conversationId: String, detectedContentType: ContentType? = null): String {
         val config = context.config.messaging.autoReply
